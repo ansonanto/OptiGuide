@@ -12,4 +12,4 @@ tqdm==4.66.2
 metapub==0.5.5
 requests==2.31.0
 beautifulsoup4==4.12.3
-pubmed2pdf==0.1.2
+pubmed2pdf==0.0.7
