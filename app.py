@@ -6,7 +6,8 @@ import PyPDF2
 import openai
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
-from langchain_chroma import Chroma  # Use this import for Chroma
+from langchain_chroma import Chroma  # Use the recommended import for Chroma
+#from langchain_community.vectorstores import Chroma  # Old import
 import chromadb
 import chromadb.config
 from langchain_openai import ChatOpenAI
@@ -25,10 +26,15 @@ from openai import OpenAI
 class CustomOpenAIEmbeddings(Embeddings):
     """Custom embeddings class that uses the direct OpenAI API."""
     
-    def __init__(self, api_key=None, model="text-embedding-3-small"):
-        """Initialize with API key and model name."""
+    def __init__(self, api_key=None, model="text-embedding-3-small", **kwargs):
+        """Initialize with API key and model name.
+        
+        Note: We accept **kwargs to handle any deprecated parameters like 'proxies'
+        but we don't use them with the new OpenAI client.
+        """
         self.api_key = api_key or OPENAI_API_KEY
         self.model = model
+        # Only pass the api_key to the client, ignore other kwargs like 'proxies'
         self.client = OpenAI(api_key=self.api_key)
         logger.info(f"Initialized CustomOpenAIEmbeddings with model {model}")
     
@@ -112,6 +118,18 @@ if 'new_documents' not in st.session_state:
     st.session_state.new_documents = []
 if 'last_processed_time' not in st.session_state:
     st.session_state.last_processed_time = None
+
+# Initialize additional session state variables for search results and UI state
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = None
+if 'selected_document' not in st.session_state:
+    st.session_state.selected_document = None
+if 'accuracy_percentage' not in st.session_state:
+    st.session_state.accuracy_percentage = None
+if 'query_history' not in st.session_state:
+    st.session_state.query_history = []
+if 'current_tab' not in st.session_state:
+    st.session_state.current_tab = "Document Management"
 
 # Function to extract text from PDF
 def extract_text_from_pdf(pdf_path):
@@ -599,7 +617,7 @@ def query_documents(query, db):
         
         context = "\n\n" + "\n\n".join(context_parts)
         
-        # Create prompt template
+        # Create prompt template for the main answer
         prompt_template = """
         You are a helpful assistant that answers questions based on the provided document context.
         
@@ -619,9 +637,47 @@ def query_documents(query, db):
             input_variables=["context", "question"]
         )
         
-        # Create and run chain
+        # Create and run chain for the main answer
         chain = LLMChain(llm=llm, prompt=prompt)
         response = chain.run(context=context, question=query)
+        
+        # Create a separate prompt for accuracy assessment
+        accuracy_prompt_template = """
+        You are an expert evaluator assessing the accuracy of answers based on source documents.
+        
+        Source Documents:
+        {context}
+        
+        Question: {question}
+        
+        Answer to Evaluate: {answer}
+        
+        Please analyze the answer and determine its accuracy percentage (0-100%) based on:
+        1. Factual correctness compared to the source documents
+        2. Completeness of information
+        3. Appropriate citations to sources
+        4. Lack of hallucinations or made-up information
+        
+        Return ONLY a number between 0 and 100 representing the accuracy percentage. Do not include any other text, explanation, or symbols.
+        """
+        
+        accuracy_prompt = PromptTemplate(
+            template=accuracy_prompt_template,
+            input_variables=["context", "question", "answer"]
+        )
+        
+        # Create and run chain for accuracy assessment
+        accuracy_chain = LLMChain(llm=llm, prompt=accuracy_prompt)
+        try:
+            accuracy_score = accuracy_chain.run(context=context, question=query, answer=response)
+            # Clean up the accuracy score to ensure it's just a number
+            accuracy_score = ''.join(c for c in accuracy_score if c.isdigit() or c == '.')
+            accuracy_percentage = float(accuracy_score)
+            # Ensure it's within 0-100 range
+            accuracy_percentage = max(0, min(100, accuracy_percentage))
+        except Exception as e:
+            logger.error(f"Error calculating accuracy score: {str(e)}")
+            accuracy_percentage = None
         
         # Return response and enhanced sources
         sources = []
@@ -642,7 +698,7 @@ def query_documents(query, db):
             
             sources.append(source_info)
             
-        return response, sources, docs
+        return response, sources, docs, accuracy_percentage
 
 # Main application UI
 def main():
@@ -908,15 +964,35 @@ def main():
                     st.session_state.db = db
                     st.session_state.processed_docs = True
                     # Process query and display results
-                    response, sources, docs = query_documents(query, db)
+                    response, sources, docs, accuracy_percentage = query_documents(query, db)
                 else:
                     st.warning("Please process documents first.")
             else:
                 # Process query and display results
-                response, sources, docs = query_documents(query, st.session_state.db)
+                response, sources, docs, accuracy_percentage = query_documents(query, st.session_state.db)
                 
-                # Display answer
+                # Display answer with accuracy percentage
                 st.subheader("Answer")
+                
+                # Show accuracy percentage if available
+                if accuracy_percentage is not None:
+                    # Determine color based on accuracy percentage
+                    if accuracy_percentage >= 90:
+                        accuracy_color = "green"
+                    elif accuracy_percentage >= 70:
+                        accuracy_color = "orange"
+                    else:
+                        accuracy_color = "red"
+                    
+                    # Display accuracy badge
+                    st.markdown(f"<div style='display: flex; align-items: center; margin-bottom: 10px;'>"
+                              f"<div style='background-color: {accuracy_color}; color: white; padding: 4px 8px; "
+                              f"border-radius: 4px; font-size: 14px; margin-right: 10px;'>"
+                              f"Accuracy: {accuracy_percentage:.1f}%</div>"
+                              f"<div style='font-size: 12px; color: gray;'>Based on source document analysis</div>"
+                              f"</div>", unsafe_allow_html=True)
+                
+                # Display the answer
                 st.write(response)
                 
                 # Display sources with enhanced information
