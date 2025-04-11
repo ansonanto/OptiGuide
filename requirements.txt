@@ -1,1 +1,15 @@
-streamlit
+streamlit==1.32.0
+openai==1.12.0
+PyPDF2==3.0.1
+chromadb==0.4.22
+python-dotenv==1.0.0
+langchain==0.1.4
+langchain-openai==0.0.5
+pycryptodome==3.19.0
+biopython==1.83
+pdfplumber==0.10.4
+tqdm==4.66.2
+metapub==0.5.5
+requests==2.31.0
+beautifulsoup4==4.12.3
+pubmed2pdf==0.1.2
